@@ -1,0 +1,77 @@
+# Path: backend/app/schemas/user.py
+from pydantic import BaseModel, EmailStr, Field
+from typing import Optional, List
+from datetime import datetime
+
+from .user_subscription import UserSubscription
+
+# Shared properties
+class UserBase(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr
+    display_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    preferred_timezone: Optional[str] = 'UTC'
+
+class UserInCampaign(BaseModel):
+    id: int
+    username: str
+    display_name: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+# Properties to receive via API on creation
+class UserCreate(UserBase):
+    password: str = Field(..., min_length=8)
+
+# Properties to receive via API on general update
+class UserUpdate(BaseModel):
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
+    email: Optional[EmailStr] = None
+    preferred_timezone: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_superuser: Optional[bool] = None
+    display_name: Optional[str] = Field(None, min_length=1, max_length=100)
+
+# Schema for user profile update (client-facing)
+class UserUpdateProfile(BaseModel):
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
+    email: Optional[EmailStr] = None
+    display_name: Optional[str] = Field(None, min_length=1, max_length=100)
+    preferred_timezone: Optional[str] = None
+
+# Schema for password change
+class UserPasswordChange(BaseModel):
+    old_password: str
+    new_password: str = Field(..., min_length=8)
+
+# Properties stored in DB, includes hashed_password
+class UserInDBBase(UserBase):
+    id: int
+    is_active: bool = True
+    is_superuser: bool = False
+    created_at: datetime
+    updated_at: datetime
+    ai_credits: int = 0
+
+    class Config:
+        from_attributes = True
+
+# Additional properties stored in DB
+class UserInDB(UserInDBBase):
+    hashed_password: str
+
+# Properties to return to client for the main /users/me endpoint
+class User(UserInDBBase):
+    current_subscription: Optional[UserSubscription] = None
+    campaigns_dm_count: int = 0
+    campaigns_member_count: int = 0
+    characters_active_count: int = 0
+    total_characters_created: int = 0
+    maps_created_this_month: int = 0
+    # NEW: This field will hold the list of features the user has access to.
+    feature_flags: List[str] = []
+    creator_status: Optional[str] = None
+class UserLogin(BaseModel):
+    username: str
+    password: str
