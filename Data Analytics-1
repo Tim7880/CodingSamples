@@ -1,0 +1,230 @@
+import pandas as pd
+import numpy as np
+
+# 1. Load the data
+try:
+    df = pd.read_csv('airbnb_listings_target_area.csv')
+    print("Data loaded successfully.")
+    print(f"Initial number of rows: {len(df)}")
+    print(f"Initial number of columns: {len(df.columns)}")
+    print("\nFirst 5 rows of the data:")
+    print(df.head())
+    print("\nDataframe info:")
+    df.info()
+except FileNotFoundError:
+    print("Error: airbnb_listings_target_area.csv not found. Please ensure the file is in the correct directory.")
+    exit()
+
+# 2. Handle missing values
+print("\n--- Handling Missing Values ---")
+missing_values = df.isnull().sum().sort_values(ascending=False)
+print("Number of missing values per column:")
+print(missing_values[missing_values > 0])
+
+# Example: Imputing 'reviews_per_month' with 0 if no reviews exist
+df['reviews_per_month'].fillna(0, inplace=True)
+print("\nMissing values in 'reviews_per_month' after imputation:", df['reviews_per_month'].isnull().sum())
+
+# Example: Removing rows where 'price' is missing (critical information)
+initial_rows = len(df)
+df.dropna(subset=['price'], inplace=True)
+rows_dropped_price = initial_rows - len(df)
+print(f"\nNumber of rows dropped due to missing 'price': {rows_dropped_price}")
+
+# Decide on a strategy for other missing values based on their nature and impact
+
+# 3. Data type conversion
+print("\n--- Data Type Conversion ---")
+print("\nData types before conversion:")
+print(df.dtypes)
+
+# Example: Converting 'price' to numeric (removing '$' and commas if present)
+if 'price' in df.columns:
+    df['price'] = df['price'].replace({'\$': '', ',': ''}, regex=True).astype(float)
+    print("\nData type of 'price' after conversion:", df['price'].dtype)
+
+# Example: Converting date columns to datetime objects (if applicable)
+date_columns = [col for col in df.columns if 'date' in col.lower()]
+for col in date_columns:
+    try:
+        df[col] = pd.to_datetime(df[col])
+        print(f"Data type of '{col}' after conversion:", df[col].dtype)
+    except ValueError:
+        print(f"Could not convert '{col}' to datetime.")
+
+# 4. Remove duplicates
+print("\n--- Removing Duplicates ---")
+initial_rows = len(df)
+df.drop_duplicates(inplace=True)
+duplicates_removed = initial_rows - len(df)
+print(f"Number of duplicate rows removed: {duplicates_removed}")
+
+# 5. Standardize text data (example with 'neighbourhood')
+if 'neighbourhood' in df.columns:
+    print("\n--- Standardizing Text Data (Neighbourhood) ---")
+    print("\nUnique values in 'neighbourhood' before standardization:")
+    print(df['neighbourhood'].unique())
+    df['neighbourhood'] = df['neighbourhood'].str.lower().str.strip()
+    print("\nUnique values in 'neighbourhood' after standardization:")
+    print(df['neighbourhood'].unique())
+
+# 6. Handle outliers (example with 'price')
+if 'price' in df.columns:
+    print("\n--- Handling Outliers (Price) ---")
+    Q1 = df['price'].quantile(0.25)
+    Q3 = df['price'].quantile(0.75)
+    IQR = Q3 - Q1
+    lower_bound = Q1 - 1.5 * IQR
+    upper_bound = Q3 + 1.5 * IQR
+    outliers = df[(df['price'] < lower_bound) | (df['price'] > upper_bound)]
+    print(f"Number of price outliers (using IQR method): {len(outliers)}")
+    # Decide whether to remove or transform outliers based on the context
+    # For this example, let's keep them for now but note their presence
+
+# 7. Create new relevant features (example: 'price_per_night')
+if 'price' in df.columns and 'minimum_nights' in df.columns:
+    df['price_per_night'] = df['price'] / df['minimum_nights']
+    print("\nNew feature 'price_per_night' created.")
+
+# 8. Verify cleaned data
+print("\n--- Verifying Cleaned Data ---")
+print("\nFirst 5 rows of the cleaned data:")
+print(df.head())
+print("\nDataframe info after cleaning:")
+df.info()
+print("\nNumber of missing values per column after cleaning:")
+print(df.isnull().sum().sort_values(ascending=False)[df.isnull().sum() > 0])
+
+# Document the cleaning process (this would also be in a separate report)
+print("\n--- Data Cleaning Process Documentation ---")
+print("1. Loaded the 'airbnb_listings_target_area.csv' dataset.")
+print("2. Handled missing values in 'reviews_per_month' by imputing with 0.")
+print("3. Removed rows with missing 'price' values.")
+print("4. Converted 'price' column to numeric.")
+print("5. Standardized text in the 'neighbourhood' column.")
+print("6. Identified price outliers using the IQR method (further action may be needed).")
+print("7. Created a new feature 'price_per_night'.")
+print("8. Checked the cleaned data for remaining issues.")
+
+# Now, the 'df' DataFrame is (hopefully) clean and ready for analysis.
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Assuming 'df' is the cleaned DataFrame from the "Process" stage
+
+# 1. Descriptive Analysis
+print("\n--- Descriptive Analysis ---")
+print("\nSummary statistics for numerical columns:")
+print(df.describe())
+
+# 2. Analyzing Price by Neighborhood
+print("\n--- Analyzing Price by Neighborhood ---")
+average_price_by_neighbourhood = df.groupby('neighbourhood')['price'].mean().sort_values(ascending=False)
+print("\nAverage price per night by neighbourhood:")
+print(average_price_by_neighbourhood.head(10))
+
+# Visualization: Top 10 most expensive neighbourhoods
+plt.figure(figsize=(10, 6))
+average_price_by_neighbourhood.head(10).plot(kind='bar')
+plt.title('Top 10 Neighbourhoods by Average Price')
+plt.xlabel('Neighbourhood')
+plt.ylabel('Average Price per Night')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+# 3. Analyzing Property Type
+print("\n--- Analyzing Property Type ---")
+average_price_by_property_type = df.groupby('room_type')['price'].mean().sort_values(ascending=False)
+print("\nAverage price per night by property type:")
+print(average_price_by_property_type)
+
+# Visualization: Average price by property type
+plt.figure(figsize=(8, 5))
+average_price_by_property_type.plot(kind='bar')
+plt.title('Average Price per Night by Property Type')
+plt.xlabel('Property Type')
+plt.ylabel('Average Price per Night')
+plt.xticks(rotation=0)
+plt.tight_layout()
+plt.show()
+
+# 4. Inferring Occupancy (using 'availability_365')
+print("\n--- Inferring Occupancy ---")
+# Assuming 'availability_365' represents the number of days a listing is available
+df['occupancy_rate'] = 1 - (df['availability_365'] / 365)
+average_occupancy_by_neighbourhood = df.groupby('neighbourhood')['occupancy_rate'].mean().sort_values(ascending=False)
+print("\nAverage occupancy rate by neighbourhood:")
+print(average_occupancy_by_neighbourhood.head(10))
+
+# Visualization: Top 10 neighbourhoods by average occupancy rate
+plt.figure(figsize=(10, 6))
+average_occupancy_by_neighbourhood.head(10).plot(kind='bar')
+plt.title('Top 10 Neighbourhoods by Average Occupancy Rate')
+plt.xlabel('Neighbourhood')
+plt.ylabel('Average Occupancy Rate')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+# 5. Analyzing Amenities (if 'amenities' column exists)
+if 'amenities' in df.columns:
+    print("\n--- Analyzing Amenities ---")
+    # Amenities are often listed as strings within a list format, e.g., "{TV,Wifi,Kitchen}"
+    # We need to process this column to count the occurrences of each amenity
+    all_amenities = []
+    for index, row in df.iterrows():
+        try:
+            amenity_list = row['amenities'].strip('{}').split(',')
+            for amenity in amenity_list:
+                amenity = amenity.strip('"')
+                if amenity:
+                    all_amenities.append(amenity)
+        except AttributeError:
+            pass  # Handle cases where 'amenities' might be NaN
+
+    amenity_counts = pd.Series(all_amenities).value_counts().nlargest(20)
+    print("\nTop 20 most common amenities:")
+    print(amenity_counts)
+
+    # Visualization: Top 20 most common amenities
+    plt.figure(figsize=(12, 7))
+    amenity_counts.plot(kind='barh')
+    plt.title('Top 20 Most Common Amenities')
+    plt.xlabel('Number of Listings')
+    plt.ylabel('Amenity')
+    plt.tight_layout()
+    plt.show()
+
+# 6. Analyzing Superhosts (if 'host_is_superhost' column exists)
+if 'host_is_superhost' in df.columns:
+    print("\n--- Analyzing Superhosts ---")
+    superhost_price_comparison = df.groupby('host_is_superhost')['price'].mean()
+    print("\nAverage price for superhosts vs. non-superhosts:")
+    print(superhost_price_comparison)
+
+    superhost_listing_count_by_neighbourhood = df.groupby('neighbourhood')['host_is_superhost'].apply(lambda x: (x == 't').sum()).sort_values(ascending=False).head(10)
+    print("\nTop 10 neighbourhoods by number of superhost listings:")
+    print(superhost_listing_count_by_neighbourhood)
+
+    # Visualization: Number of superhost listings in top neighbourhoods
+    plt.figure(figsize=(10, 6))
+    superhost_listing_count_by_neighbourhood.plot(kind='bar')
+    plt.title('Top 10 Neighbourhoods by Number of Superhost Listings')
+    plt.xlabel('Neighbourhood')
+    plt.ylabel('Number of Superhost Listings')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    plt.show()
+
+# Summary of Analysis (this would be more detailed in the report)
+print("\n--- Summary of Analysis ---")
+print("The analysis reveals price variations across different neighbourhoods and property types.")
+print("Occupancy rates appear to be higher in certain neighbourhoods.")
+if 'amenities' in df.columns:
+    print("Key amenities and their prevalence have been identified.")
+if 'host_is_superhost' in df.columns:
+    print("Differences in average pricing between superhosts and non-superhosts were observed.")
+print("Further analysis will explore correlations and more complex relationships.")
