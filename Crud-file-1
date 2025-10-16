@@ -1,0 +1,401 @@
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
+from typing import List, Optional
+
+from fastapi import HTTPException
+from app.models.campaign import Campaign as CampaignModel
+from app.models.campaign_member import CampaignMember as CampaignMemberModel, CampaignMemberStatusEnum
+from app.models.user import User as UserModel
+from app.models.character import Character as CharacterModel
+from app.models.skill import Skill as SkillModel
+from app.models.character_skill import CharacterSkill as CharacterSkillModel
+from app.models.item import Item as ItemModel
+from app.models.character_item import CharacterItem as CharacterItemModel
+from app.models.spell import Spell as SpellModel
+from app.models.character_spell import CharacterSpell as CharacterSpellModel
+
+from app.schemas.campaign import CampaignCreate as CampaignCreateSchema
+from app.schemas.campaign import CampaignUpdate as CampaignUpdateSchema
+from app.crud import crud_character, crud_game_token
+from app.schemas.game_token import TokenCreate
+
+class CRUDCampaign:
+    async def award_xp_to_characters(
+        self, db: AsyncSession, *, campaign: CampaignModel, character_ids: List[int], xp_to_add: int
+    ) -> List[CharacterModel]:
+        if xp_to_add <= 0:
+            raise ValueError("XP to award must be a positive number.")
+
+        active_member_char_ids = {
+            member.character_id for member in campaign.members 
+            if member.status == CampaignMemberStatusEnum.ACTIVE and member.character_id is not None
+        }
+
+        for char_id in character_ids:
+            if char_id not in active_member_char_ids:
+                raise ValueError(f"Character with ID {char_id} is not an active member of this campaign.")
+
+        updated_characters = []
+        for char_id in character_ids:
+            character_to_award = await crud_character.get_character(db=db, character_id=char_id)
+            if character_to_award:
+                updated_char = await crud_character.award_xp_to_character(
+                    db=db, character=character_to_award, xp_to_add=xp_to_add
+                )
+                updated_characters.append(updated_char)
+        
+        return updated_characters
+
+    async def _get_fully_loaded_campaign_member(self, db: AsyncSession, campaign_member_id: int) -> Optional[CampaignMemberModel]:
+        result = await db.execute(
+            select(CampaignMemberModel)
+            .options(
+                selectinload(CampaignMemberModel.campaign).options(
+                    selectinload(CampaignModel.dm)
+                ),
+                selectinload(CampaignMemberModel.user),
+                selectinload(CampaignMemberModel.character).options(
+                    selectinload(CharacterModel.skills).selectinload(CharacterSkillModel.skill_definition),
+                    selectinload(CharacterModel.inventory_items).selectinload(CharacterItemModel.item_definition),
+                    selectinload(CharacterModel.known_spells).selectinload(CharacterSpellModel.spell_definition)
+                )
+            )
+            .filter(CampaignMemberModel.id == campaign_member_id)
+        )
+        return result.scalars().first()
+
+    async def create_campaign(
+        self, db: AsyncSession, *, campaign_in: CampaignCreateSchema, dm_user_id: int
+    ) -> CampaignModel:
+        campaign_data = campaign_in.model_dump() 
+        db_campaign_for_creation = CampaignModel(**campaign_data, dm_user_id=dm_user_id)
+        db.add(db_campaign_for_creation)
+        await db.commit()
+        created_campaign = await self.get_campaign(db=db, campaign_id=db_campaign_for_creation.id)
+        if not created_campaign:
+            raise Exception("Failed to retrieve campaign after creation for response.") 
+        return created_campaign
+
+    async def get_campaign(self, db: AsyncSession, campaign_id: int) -> Optional[CampaignModel]:
+        result = await db.execute(
+            select(CampaignModel)
+            .options(
+                selectinload(CampaignModel.dm), 
+                selectinload(CampaignModel.active_map),
+                selectinload(CampaignModel.members).options(
+                    selectinload(CampaignMemberModel.user),
+                    selectinload(CampaignMemberModel.campaign),
+                    selectinload(CampaignMemberModel.character).options(
+                        selectinload(CharacterModel.skills).selectinload(CharacterSkillModel.skill_definition),
+                        selectinload(CharacterModel.inventory_items).selectinload(CharacterItemModel.item_definition),
+                        selectinload(CharacterModel.known_spells).selectinload(CharacterSpellModel.spell_definition)
+                    )
+                )
+            )
+            .filter(CampaignModel.id == campaign_id)
+        )
+        return result.scalars().first()
+
+    async def get_campaigns_by_dm(
+        self, db: AsyncSession, *, dm_user_id: int, skip: int = 0, limit: int = 100
+    ) -> List[CampaignModel]:
+        result = await db.execute(
+            select(CampaignModel)
+            .options(
+                selectinload(CampaignModel.dm), 
+                selectinload(CampaignModel.members).options(
+                    selectinload(CampaignMemberModel.user),
+                    selectinload(CampaignMemberModel.character).options(
+                        selectinload(CharacterModel.skills).selectinload(CharacterSkillModel.skill_definition),
+                        selectinload(CharacterModel.inventory_items).selectinload(CharacterItemModel.item_definition),
+                        selectinload(CharacterModel.known_spells).selectinload(CharacterSpellModel.spell_definition)
+                    )
+                )
+            )
+            .filter(CampaignModel.dm_user_id == dm_user_id)
+            .order_by(CampaignModel.created_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        return result.scalars().all()
+
+    async def get_campaigns_for_user_as_member(
+        self, db: AsyncSession, *, user_id: int, skip: int = 0, limit: int = 100
+    ) -> List[CampaignModel]:
+        result = await db.execute(
+            select(CampaignModel)
+            .join(CampaignModel.members)
+            .options(
+                selectinload(CampaignModel.dm),
+                selectinload(CampaignModel.members).options(
+                    selectinload(CampaignMemberModel.user),
+                    selectinload(CampaignMemberModel.character).options(
+                        selectinload(CharacterModel.skills).selectinload(CharacterSkillModel.skill_definition),
+                        selectinload(CharacterModel.inventory_items).selectinload(CharacterItemModel.item_definition),
+                        selectinload(CharacterModel.known_spells).selectinload(CharacterSpellModel.spell_definition)
+                    )
+                )
+            )
+            .filter(CampaignMemberModel.user_id == user_id)
+            .filter(CampaignMemberModel.status == CampaignMemberStatusEnum.ACTIVE)
+            .order_by(CampaignModel.created_at.desc()) 
+            .offset(skip)
+            .limit(limit)
+            .distinct() 
+        )
+        return result.scalars().all()
+
+    async def get_discoverable_campaigns(
+        self, db: AsyncSession, *, skip: int = 0, limit: int = 100
+    ) -> List[CampaignModel]:
+        result = await db.execute(
+            select(CampaignModel)
+            .options(
+                selectinload(CampaignModel.dm), 
+                selectinload(CampaignModel.members).options(
+                    selectinload(CampaignMemberModel.user),
+                    selectinload(CampaignMemberModel.character).options(
+                        selectinload(CharacterModel.skills).selectinload(CharacterSkillModel.skill_definition),
+                        selectinload(CharacterModel.inventory_items).selectinload(CharacterItemModel.item_definition),
+                        selectinload(CharacterModel.known_spells).selectinload(CharacterSpellModel.spell_definition)
+                    )
+                )
+            )
+            .filter(CampaignModel.is_open_for_recruitment == True)
+            .order_by(CampaignModel.updated_at.desc())
+            .offset(skip)
+            .limit(limit)
+        )
+        return result.scalars().all()
+
+    async def update_campaign(
+        self, db: AsyncSession, *, campaign: CampaignModel, campaign_in: CampaignUpdateSchema
+    ) -> CampaignModel:
+        update_data = campaign_in.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(campaign, field, value)
+        db.add(campaign)
+        await db.commit()
+        await db.refresh(campaign)
+        return await self.get_campaign(db=db, campaign_id=campaign.id)
+
+    async def delete_campaign(
+        self, db: AsyncSession, *, campaign_id: int, dm_user_id: int
+    ) -> Optional[CampaignModel]:
+        db_campaign = await self.get_campaign(db=db, campaign_id=campaign_id)
+        if not db_campaign or db_campaign.dm_user_id != dm_user_id:
+            return None
+        await db.delete(db_campaign)
+        await db.commit()
+        return db_campaign
+
+    async def get_campaign_member_by_user_id(
+        self, db: AsyncSession, *, campaign_id: int, user_id: int
+    ) -> Optional[CampaignMemberModel]:
+        result = await db.execute(
+            select(CampaignMemberModel).filter_by(campaign_id=campaign_id, user_id=user_id)
+        )
+        return result.scalars().first()
+
+    async def create_invitation(
+        self, db: AsyncSession, *, campaign_id: int, user_to_invite_id: int
+    ) -> CampaignMemberModel:
+        campaign = await self.get_campaign(db=db, campaign_id=campaign_id)
+        if not campaign:
+            raise ValueError("Campaign not found.")
+        
+        if user_to_invite_id == campaign.dm_user_id:
+            raise ValueError("You cannot invite yourself to your own campaign.")
+
+        existing_member = await self.get_campaign_member_by_user_id(db=db, campaign_id=campaign_id, user_id=user_to_invite_id)
+        if existing_member:
+            raise ValueError(f"User is already a member of this campaign with status: {existing_member.status.value}")
+
+        if campaign.max_players is not None:
+            active_members_count = sum(1 for m in campaign.members if m.status == CampaignMemberStatusEnum.ACTIVE)
+            if active_members_count >= campaign.max_players:
+                raise ValueError("Campaign is already full.")
+
+        new_invitation = CampaignMemberModel(
+            campaign_id=campaign_id,
+            user_id=user_to_invite_id,
+            status=CampaignMemberStatusEnum.INVITED
+        )
+        db.add(new_invitation)
+        await db.commit()
+        await db.refresh(new_invitation)
+        return await self._get_fully_loaded_campaign_member(db, new_invitation.id)
+
+    async def add_member_to_campaign(
+        self, db: AsyncSession, *, campaign_id: int, user_id: int, character_id: Optional[int] = None, 
+        initial_status: CampaignMemberStatusEnum = CampaignMemberStatusEnum.ACTIVE
+    ) -> Optional[CampaignMemberModel]:
+        campaign_check = await db.get(CampaignModel, campaign_id)
+        if not campaign_check: return None 
+        if campaign_check.dm_user_id == user_id: return None 
+        existing_member = await self.get_campaign_member_by_user_id(db=db, campaign_id=campaign_id, user_id=user_id)
+        if existing_member: return None 
+        
+        campaign_with_members = await self.get_campaign(db=db, campaign_id=campaign_id)
+        active_members_count = sum(1 for m in campaign_with_members.members if m.status == CampaignMemberStatusEnum.ACTIVE)
+        if campaign_with_members.max_players is not None and active_members_count >= campaign_with_members.max_players:
+            return None
+
+        new_member = CampaignMemberModel(
+            campaign_id=campaign_id, user_id=user_id, character_id=character_id, status=initial_status
+        )
+        db.add(new_member)
+        await db.commit()
+        await db.refresh(new_member)
+        return await self._get_fully_loaded_campaign_member(db, new_member.id)
+
+    async def create_join_request(
+        self, db: AsyncSession, *, campaign_id: int, user_id: int, character_id: Optional[int] = None
+    ) -> Optional[CampaignMemberModel]:
+        campaign_check = await db.get(CampaignModel, campaign_id)
+        if not campaign_check: return None 
+        if not campaign_check.is_open_for_recruitment: return None
+        if campaign_check.dm_user_id == user_id: return None 
+        existing_member = await self.get_campaign_member_by_user_id(db=db, campaign_id=campaign_id, user_id=user_id)
+        if existing_member: return None 
+        
+        campaign_with_members = await self.get_campaign(db=db, campaign_id=campaign_id)
+        active_members_count = sum(1 for m in campaign_with_members.members if m.status == CampaignMemberStatusEnum.ACTIVE)
+        if campaign_with_members.max_players is not None and active_members_count >= campaign_with_members.max_players:
+            return None
+
+        join_request = CampaignMemberModel(
+            campaign_id=campaign_id, user_id=user_id, character_id=character_id, status=CampaignMemberStatusEnum.PENDING_APPROVAL
+        )
+        db.add(join_request)
+        await db.commit()
+        await db.refresh(join_request)
+        return await self._get_fully_loaded_campaign_member(db, join_request.id)
+
+    async def get_pending_join_requests_for_campaign(
+        self, db: AsyncSession, *, campaign_id: int, requesting_user_id: int, skip: int = 0, limit: int = 100
+    ) -> List[CampaignMemberModel]:
+        campaign = await db.get(CampaignModel, campaign_id)
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+        if campaign.dm_user_id != requesting_user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to view join requests for this campaign")
+
+        result = await db.execute(
+            select(CampaignMemberModel)
+            .options(
+                selectinload(CampaignMemberModel.user),
+                selectinload(CampaignMemberModel.campaign).options(
+                    selectinload(CampaignModel.dm)
+                ),
+                selectinload(CampaignMemberModel.character).options(
+                    selectinload(CharacterModel.skills).selectinload(CharacterSkillModel.skill_definition),
+                    selectinload(CharacterModel.inventory_items).selectinload(CharacterItemModel.item_definition),
+                    selectinload(CharacterModel.known_spells).selectinload(CharacterSpellModel.spell_definition)
+                )
+            )
+            .filter(CampaignMemberModel.campaign_id == campaign_id)
+            .filter(CampaignMemberModel.status == CampaignMemberStatusEnum.PENDING_APPROVAL)
+            .order_by(CampaignMemberModel.joined_at.asc())
+            .offset(skip)
+            .limit(limit)
+        )
+        return result.scalars().all()
+
+    async def update_campaign_member_status(
+        self, db: AsyncSession, *, campaign_id: int, user_id: int, new_status: CampaignMemberStatusEnum
+    ) -> Optional[CampaignMemberModel]:
+        member_to_update = await self.get_campaign_member_by_user_id(db=db, campaign_id=campaign_id, user_id=user_id)
+        if not member_to_update: return None
+        
+        member_to_update.status = new_status
+        db.add(member_to_update)
+        await db.commit()
+        await db.refresh(member_to_update)
+        
+        if new_status == CampaignMemberStatusEnum.ACTIVE and member_to_update.character_id:
+            character = await crud_character.get_character(db=db, character_id=member_to_update.character_id)
+            if character:
+                existing_token = await crud_game_token.get_token_by_character_id(db, character_id=character.id, campaign_id=campaign_id)
+                if not existing_token:
+                    placeholder_text = character.name[:3].upper()
+                    image_path = f"https://placehold.co/100x100/3498db/FFFFFF?text={placeholder_text}"
+
+                    token_payload = TokenCreate(
+                        name=character.name,
+                        image_path=image_path,
+                        token_type='player',
+                        character_id=character.id,
+                        controlled_by_user_id=character.user_id
+                    )
+                    await crud_game_token.create_token(db=db, token_in=token_payload, campaign_id=campaign_id)
+
+        return await self._get_fully_loaded_campaign_member(db, member_to_update.id)
+
+    async def get_campaign_members(
+        self, db: AsyncSession, *, campaign_id: int, status_filter: Optional[CampaignMemberStatusEnum] = None
+    ) -> List[CampaignMemberModel]:
+        query = select(CampaignMemberModel).options(
+            selectinload(CampaignMemberModel.user),
+            selectinload(CampaignMemberModel.campaign).options(
+                selectinload(CampaignModel.dm)
+            ),
+            selectinload(CampaignMemberModel.character).options(
+                selectinload(CharacterModel.skills).selectinload(CharacterSkillModel.skill_definition),
+                selectinload(CharacterModel.inventory_items).selectinload(CharacterItemModel.item_definition),
+                selectinload(CharacterModel.known_spells).selectinload(CharacterSpellModel.spell_definition)
+            )
+        ).filter(CampaignMemberModel.campaign_id == campaign_id)
+
+        if status_filter:
+            query = query.filter(CampaignMemberModel.status == status_filter)
+        
+        result = await db.execute(query)
+        return result.scalars().all()
+
+    async def remove_member_from_campaign(
+        self, db: AsyncSession, *, campaign_id: int, user_id_to_remove: int
+    ) -> Optional[CampaignMemberModel]:
+        member_id_result = await db.execute(select(CampaignMemberModel.id).filter_by(campaign_id=campaign_id, user_id=user_id_to_remove))
+        member_id = member_id_result.scalar_one_or_none()
+        if not member_id:
+            return None
+
+        member_for_return = await self._get_fully_loaded_campaign_member(db, member_id)
+        if not member_for_return:
+            return None
+
+        member_to_delete = await db.get(CampaignMemberModel, member_id)
+        if member_to_delete:
+            await db.delete(member_to_delete)
+            await db.commit()
+            return member_for_return
+        return None
+
+
+    async def update_campaign_member_character(
+        self, db: AsyncSession, *, campaign_id: int, user_id: int, character_id: Optional[int]
+    ) -> Optional[CampaignMemberModel]:
+        member_to_update = await self.get_campaign_member_by_user_id(db=db, campaign_id=campaign_id, user_id=user_id)
+        if not member_to_update: return None
+        
+        if character_id is not None:
+            char_result = await db.execute(select(CharacterModel).filter_by(id=character_id, user_id=user_id))
+            if not char_result.scalars().first():
+                raise ValueError("Invalid character_id: does not exist or does not belong to the user.")
+
+        member_to_update.character_id = character_id
+        db.add(member_to_update)
+        await db.commit()
+        await db.refresh(member_to_update)
+        return await self._get_fully_loaded_campaign_member(db, member_to_update.id)
+
+    async def set_active_map(self, db: AsyncSession, *, campaign: CampaignModel, map_id: int) -> CampaignModel:
+        campaign.active_map_id = map_id
+        db.add(campaign)
+        await db.commit()
+        await db.refresh(campaign)
+        return await self.get_campaign(db=db, campaign_id=campaign.id)
+
+crud_campaign = CRUDCampaign()
