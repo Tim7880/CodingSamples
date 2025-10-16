@@ -1,0 +1,100 @@
+# Path: api/app/schemas/campaign.py
+from pydantic import BaseModel, Field
+from typing import Optional, List
+from datetime import datetime
+
+# --- MODIFIED: Import the new UserInCampaign schema ---
+from .user import User as UserSchema, UserInCampaign
+from .character import Character as CharacterSchema 
+from app.models.campaign_member import CampaignMemberStatusEnum
+
+class CampaignBasicInfoSchema(BaseModel):
+    id: int
+    title: str
+    dm_user_id: int
+    dm: Optional[UserInCampaign] = None # MODIFIED: Use the lean schema here too
+
+    class Config:
+        from_attributes = True
+
+class CampaignMemberBase(BaseModel):
+    user_id: int 
+    character_id: Optional[int] = None
+    status: Optional[CampaignMemberStatusEnum] = CampaignMemberStatusEnum.PENDING_APPROVAL
+
+class CampaignMemberCreate(CampaignMemberBase):
+    pass
+
+class CampaignMemberAdd(BaseModel): 
+    user_id_to_add: int = Field(..., description="ID of the user to add as a player")
+    character_id: Optional[int] = Field(None, description="ID of the character the player will use (optional at time of adding)")
+
+class CampaignMemberUpdateCharacter(BaseModel):
+    character_id: Optional[int] = Field(None, description="ID of the new character, or null to unassign")
+
+class CampaignMemberUpdateStatus(BaseModel):
+    status: CampaignMemberStatusEnum
+
+class CampaignMember(CampaignMemberBase): 
+    id: int
+    campaign_id: int 
+    status: CampaignMemberStatusEnum 
+    joined_at: datetime 
+    
+    # --- MODIFIED: Use the new, specific schema for the user field ---
+    user: Optional[UserInCampaign] = None 
+    character: Optional[CharacterSchema] = None 
+    campaign: Optional[CampaignBasicInfoSchema] = None 
+
+    class Config:
+        from_attributes = True
+
+class CampaignBase(BaseModel):
+    title: str = Field(..., min_length=3, max_length=255)
+    description: Optional[str] = None
+    banner_image_url: Optional[str] = Field(None, max_length=512)
+    max_players: Optional[int] = Field(None, ge=1)
+    next_session_utc: Optional[datetime] = None 
+    house_rules: Optional[str] = None
+    is_open_for_recruitment: Optional[bool] = Field(default=False)
+    session_notes: Optional[str] = None
+
+class CampaignCreate(CampaignBase):
+    pass 
+
+class CampaignUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=3, max_length=255)
+    description: Optional[str] = None
+    banner_image_url: Optional[str] = Field(None, max_length=512)
+    max_players: Optional[int] = Field(None, ge=1)
+    next_session_utc: Optional[datetime] = None
+    house_rules: Optional[str] = None
+    is_open_for_recruitment: Optional[bool] = None
+    session_notes: Optional[str] = None
+
+class CampaignInDBBase(CampaignBase):
+    id: int
+    dm_user_id: int
+    dm: Optional[UserInCampaign] = None 
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class Campaign(CampaignInDBBase): 
+    dm: Optional[UserInCampaign] = None # MODIFIED: Use the lean schema here too
+    members: List[CampaignMember] = []
+
+class PlayerCampaignJoinRequest(BaseModel):
+    character_id: Optional[int] = Field(None, description="Optional ID of the character the player proposes to use.")
+class GoldAwardRequest(BaseModel):
+    amount: int = Field(..., gt=0, description="The amount of gold to award.")
+    character_ids: List[int] = Field(..., min_length=1, description="List of character IDs to award gold to.")
+class ItemAwardRequest(BaseModel):
+    item_id: int = Field(..., description="The ID of the item definition to award.")
+    quantity: int = Field(default=1, gt=0, description="The quantity of the item to award.")
+    character_ids: List[int] = Field(..., min_length=1, description="List of character IDs to award the item(s) to.")
+
+class CampaignInviteRequest(BaseModel):
+    username: str = Field(..., description="The username of the player to invite.")
