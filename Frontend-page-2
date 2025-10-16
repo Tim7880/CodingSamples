@@ -1,0 +1,62 @@
+// Path: src/pages/CompendiumPage.tsx
+import React, { useEffect } from 'react';
+import { NavLink, Outlet } from 'react-router-dom';
+import styles from './CompendiumPage.module.css';
+
+const CompendiumPage: React.FC = () => {
+    useEffect(() => {
+        const imageUrl = `/assets/compendium.png`;
+        document.body.style.backgroundImage = `url(${imageUrl})`;
+        document.body.style.backgroundSize = 'cover';
+        document.body.style.backgroundPosition = 'center center';
+        document.body.style.backgroundAttachment = 'fixed';
+        return () => {
+            document.body.style.backgroundImage = '';
+            document.body.style.backgroundSize = '';
+            document.body.style.backgroundPosition = '';
+            document.body.style.backgroundAttachment = '';
+        };
+    }, []);
+
+    const activeLinkStyle = {
+        backgroundColor: 'var(--ink-color-light)',
+        color: 'var(--ink-color-dark)',
+    };
+
+    return (
+        <div className={styles.pageContainer}>
+            <header className={styles.header}>
+                <h1 className={styles.title}>Compendium</h1>
+            </header>
+            
+            <div className={styles.layout}>
+                <aside className={styles.sidebar}>
+                    <h2 className={styles.sidebarTitle}>Categories</h2>
+                    <nav>
+                        <ul className={styles.sidebarNav}>
+                            <li><NavLink to="/compendium/races" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Races</NavLink></li>
+                            <li><NavLink to="/compendium/classes" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Classes</NavLink></li>
+                            <li><NavLink to="/compendium/backgrounds" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Backgrounds</NavLink></li>
+                            <li><NavLink to="/compendium/conditions" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Conditions</NavLink></li>
+                            <li><NavLink to="/compendium/monsters" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Monsters</NavLink></li>
+                            <li><NavLink to="/compendium/spells" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Spells</NavLink></li>
+                            <li><NavLink to="/compendium/items" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Items</NavLink></li>
+                            
+                            {/* --- NEW: Added divider and links to new pages --- */}
+                            <hr className={styles.sidebarDivider} />
+                            
+                            <li><NavLink to="/compendium/guide" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>User Guide</NavLink></li>
+                            <li><NavLink to="/compendium/terms" className={styles.sidebarLink} style={({ isActive }) => isActive ? activeLinkStyle : {}}>Terms of Service</NavLink></li>
+                        </ul>
+                    </nav>
+                </aside>
+
+                <main className={styles.contentOutlet}>
+                    <Outlet />
+                </main>
+            </div>
+        </div>
+    );
+};
+
+export default CompendiumPage;
