@@ -1,0 +1,75 @@
+// Path: src/components/game/DiceRoller.tsx
+import React, { useState } from 'react';
+import styles from './DiceRoller.module.css';
+
+// A more descriptive data structure for our dice, including SVG data for icons
+const DICE_TYPES = [
+    { sides: 4, label: 'd4', svgPath: 'M50 5L95 82H5z', viewBox: '0 0 100 100' },
+    { sides: 6, label: 'd6', svgPath: 'M82 18H18v64h64V18z', viewBox: '0 0 100 100' },
+    { sides: 8, label: 'd8', svgPath: 'M50 5L95 50L50 95L5 50L50 5z', viewBox: '0 0 100 100' },
+    { sides: 10, label: 'd10', svgPath: 'M50 5L90 35L90 65L50 95L10 65L10 35L50 5z', viewBox: '0 0 100 100' },
+    { sides: 12, label: 'd12', svgPath: 'M50 5L92 35L75 80H25L8 35L50 5z', viewBox: '0 0 100 100' },
+    { sides: 20, label: 'd20', svgPath: 'M50 5L95 38L78 95H22L5 38L50 5z', viewBox: '0 0 100 100' },
+    { sides: 100, label: 'd%', svgPath: 'M62,25.5A10.5,10.5 0 1 1 51.5,15A10.5,10.5 0 0 1 62,25.5ZM48.5,74.5A10.5,10.5 0 1 1 38,85A10.5,10.5 0 0 1 48.5,74.5ZM72,15L28,85', viewBox: '0 2 100 100' }, // Custom path for a percent sign
+];
+
+interface DiceRollerProps {
+  onRoll: (sides: number, count: number) => void;
+  disabled?: boolean;
+}
+
+const DiceRoller: React.FC<DiceRollerProps> = ({ onRoll, disabled = false }) => {
+  const [count, setCount] = useState(1);
+
+  const handleCountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = parseInt(e.target.value, 10);
+    if (value > 0 && value <= 100) {
+      setCount(value);
+    }
+  };
+
+  const handleRollClick = (sides: number) => {
+    onRoll(sides, count);
+  };
+
+  return (
+    <div className={styles.rollerWidget}>
+      <div className={styles.countContainer}>
+        <label htmlFor="dice-count" className={styles.countLabel}>Quantity</label>
+        <input
+          id="dice-count"
+          type="number"
+          value={count}
+          onChange={handleCountChange}
+          className={styles.countInput}
+          min="1"
+          max="100"
+          disabled={disabled}
+        />
+      </div>
+      <div className={styles.diceTray}>
+        {DICE_TYPES.map(die => (
+          <div
+            key={die.label}
+            className={`${styles.dieIcon} ${disabled ? styles.disabled : ''}`}
+            onClick={() => !disabled && handleRollClick(die.sides)}
+            title={`Roll ${count}d${die.sides}`}
+          >
+            <svg
+              className={styles.dieSvg}
+              viewBox={die.viewBox}
+              preserveAspectRatio="xMidYMid meet"
+            >
+              <path d={die.svgPath} />
+              <text x="50" y="58" className={styles.dieText}>
+                {die.label}
+              </text>
+            </svg>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default DiceRoller;
