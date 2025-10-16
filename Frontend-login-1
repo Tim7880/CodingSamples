@@ -1,0 +1,166 @@
+// Path: src/pages/LoginPage.tsx
+import React, { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import ThemedInput from '../components/common/ThemedInput'; 
+import ThemedButton from '../components/common/ThemedButton'; 
+import { useAuth } from '../contexts/AuthContext';
+
+const LoginPage: React.FC = () => {
+    const [identifier, setIdentifier] = useState(''); 
+    const [password, setPassword] = useState('');
+    
+    const auth = useAuth();
+    const navigate = useNavigate();
+
+    const [formError, setFormError] = useState<string | null>(null);
+    const [formIsLoading, setFormIsLoading] = useState(false);
+
+    useEffect(() => {
+        const imageUrl = `/assets/scholars-study.png`;
+        
+        document.body.style.backgroundImage = `url(${imageUrl})`;
+        document.body.style.backgroundSize = 'cover';
+        document.body.style.backgroundPosition = 'center center';
+        document.body.style.backgroundAttachment = 'fixed';
+
+        return () => {
+            document.body.style.backgroundImage = '';
+            document.body.style.backgroundSize = '';
+            document.body.style.backgroundPosition = '';
+            document.body.style.backgroundAttachment = '';
+        };
+    }, []);
+
+    const handleSubmit = async (event: React.FormEvent) => {
+        event.preventDefault();
+        setFormIsLoading(true);
+        setFormError(null);
+
+        if (!auth) return;
+
+        try {
+            await auth.login({ username: identifier, password });
+            navigate('/dashboard');
+        } catch (err: any) {
+            setFormError(err.message || 'An unknown error occurred during login.');
+        } finally {
+            setFormIsLoading(false);
+        }
+    };
+
+    const pageStyle: React.CSSProperties = {
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '100vh',
+        padding: '20px',
+    };
+
+    const formContainerStyle: React.CSSProperties = {
+        backgroundColor: 'rgba(253, 246, 227, 0.9)',
+        backdropFilter: 'blur(4px)',
+        padding: '30px 40px',
+        borderRadius: '8px',
+        boxShadow: '0px 6px 18px rgba(0,0,0,0.25), 0px 0px 0px 1px var(--ink-color-light)',
+        maxWidth: '450px',
+        width: '100%',
+        textAlign: 'center',
+        border: '1px solid rgba(120, 90, 70, 0.4)',
+    };
+    
+    const titleStyle: React.CSSProperties = {
+        fontFamily: 'var(--font-heading-ornate)', color: 'var(--ink-color-dark)',
+        fontSize: '2.8em', marginBottom: '1.5em',
+    };
+    
+    const errorStyle: React.CSSProperties = {
+        fontFamily: 'var(--font-body-primary)', color: '#a02c2c', 
+        marginTop: '1em', minHeight: '1.2em',
+    };
+
+    // --- MODIFIED: Changed to a flexbox layout for robustness ---
+    const linksContainerStyle: React.CSSProperties = {
+        marginTop: '2em',
+        fontFamily: 'var(--font-body-primary)',
+        lineHeight: '1.6',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '0.5em' // Adds a small space between the links
+    };
+
+    const linkStyle: React.CSSProperties = {
+        color: 'var(--ink-color-medium)',
+        textDecoration: 'underline'
+    };
+
+    if (auth?.isLoading && !formIsLoading) {
+        return <div style={pageStyle}><p>Loading Scriptorium...</p></div>;
+    }
+
+    return (
+        <div style={pageStyle}>
+            <div style={formContainerStyle}>
+                <h1 style={titleStyle}>
+                    Access the Scriptorium
+                </h1>
+                <form onSubmit={handleSubmit}>
+                    <ThemedInput
+                        label="Scribe's Name or Email:"
+                        id="identifier"
+                        name="identifier"
+                        type="text"
+                        value={identifier}
+                        onChange={(e) => setIdentifier(e.target.value)}
+                        placeholder="Enter your registered name or email"
+                        disabled={formIsLoading || auth?.isLoading}
+                        required
+                        style={{ marginBottom: '1.5em' }}
+                    />
+                    <ThemedInput
+                        label="Secret Word (Password):"
+                        id="password"
+                        name="password"
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="Your pass-phrase to the archives"
+                        disabled={formIsLoading || auth?.isLoading}
+                        required
+                        style={{ marginBottom: '1.5em' }}
+                    />
+                    {formError && <p style={errorStyle}>{formError}</p>}
+                    {auth?.error && !formError && <p style={errorStyle}>{auth.error}</p>}
+                    <div style={{ marginTop: '2.5em' }}>
+                        <ThemedButton 
+                            type="submit" 
+                            runeSymbol="�️" 
+                            variant="green" 
+                            tooltipText={formIsLoading || auth?.isLoading ? "Unlocking..." : "Unlock the Archives"}
+                            aria-label="Login"
+                            disabled={formIsLoading || auth?.isLoading}
+                        >
+                            {(formIsLoading || auth?.isLoading) ? "Loading..." : ""} 
+                        </ThemedButton>
+                    </div>
+                </form>
+                <div style={linksContainerStyle}>
+                    <p>
+                        New to the Scriptorium?{' '}
+                        <Link to="/register" style={linkStyle}>
+                            Inscribe your name here.
+                        </Link>
+                    </p>
+                    <p>
+                        <Link to="/forgot-password" style={linkStyle}>
+                            Forgot your secret word?
+                        </Link>
+                    </p>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+export default LoginPage;
