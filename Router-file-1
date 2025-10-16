@@ -1,0 +1,487 @@
+# Path: api/app/routers/campaigns.py
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select 
+from sqlalchemy.orm import selectinload
+from typing import List, Optional
+
+from app.db.database import get_db
+from app.schemas.campaign import (
+    CampaignCreate, CampaignUpdate, Campaign as CampaignSchema,
+    CampaignMember as CampaignMemberSchema, CampaignMemberAdd, CampaignMemberUpdateCharacter,
+    PlayerCampaignJoinRequest, CampaignMemberStatusEnum, CampaignMemberUpdateStatus,
+    GoldAwardRequest, ItemAwardRequest, CampaignInviteRequest
+)
+from app.schemas.user import UserInCampaign
+from app.schemas.character import Character as CharacterSchema
+from app.schemas.item import CharacterItem as CharacterItemSchema
+from app.schemas.xp import XPAwardRequest
+# CORRECTED: Import the crud objects directly
+from app.crud.crud_campaign import crud_campaign
+from app.crud.crud_user import crud_user
+from app.crud import crud_character
+from app.models.user import User as UserModel
+from app.models.campaign_member import CampaignMember as CampaignMemberModel
+from app.models.campaign import Campaign as CampaignModel
+from app.routers.auth import get_current_active_user
+
+router = APIRouter(
+    prefix="/campaigns", 
+    tags=["Campaigns"],
+    dependencies=[Depends(get_current_active_user)]
+)
+
+async def get_campaign_and_verify_dm(campaign_id: int, db: AsyncSession = Depends(get_db), current_user: UserModel = Depends(get_current_active_user)) -> CampaignModel:
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the Dungeon Master of this campaign can perform this action."
+        )
+    return campaign
+
+@router.post("/{campaign_id}/award-xp", response_model=List[CharacterSchema])
+async def dm_award_xp_to_characters(
+    campaign_id: int,
+    xp_award: XPAwardRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the DM can award XP in this campaign."
+        )
+    
+    try:
+        updated_characters = await crud_campaign.award_xp_to_characters(
+            db=db, 
+            campaign=campaign, 
+            character_ids=xp_award.character_ids, 
+            xp_to_add=xp_award.amount
+        )
+        return updated_characters
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@router.post("/{campaign_id}/award-gold", response_model=List[CharacterSchema])
+async def dm_award_gold_to_characters(
+    gold_award: GoldAwardRequest,
+    campaign: CampaignModel = Depends(get_campaign_and_verify_dm),
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        # NOTE: Assumes a function `award_gold_to_characters_in_campaign` exists in crud_campaign
+        updated_characters = await crud_campaign.award_gold_to_characters_in_campaign(
+            db=db,
+            campaign=campaign,
+            character_ids=gold_award.character_ids,
+            gold_to_add=gold_award.amount
+        )
+        return updated_characters
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@router.post("/{campaign_id}/award-item", response_model=List[CharacterItemSchema])
+async def dm_award_item_to_characters(
+    item_award: ItemAwardRequest,
+    campaign: CampaignModel = Depends(get_campaign_and_verify_dm),
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        # NOTE: Assumes a function `award_item_to_characters_in_campaign` exists in crud_campaign
+        updated_inventories = await crud_campaign.award_item_to_characters_in_campaign(
+            db=db,
+            campaign=campaign,
+            character_ids=item_award.character_ids,
+            item_id=item_award.item_id,
+            quantity=item_award.quantity
+        )
+        return updated_inventories
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@router.post("/", response_model=CampaignSchema, status_code=status.HTTP_201_CREATED)
+async def create_new_campaign(
+    campaign_in: CampaignCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    return await crud_campaign.create_campaign(
+        db=db, campaign_in=campaign_in, dm_user_id=current_user.id
+    )
+
+@router.get("/", response_model=List[CampaignSchema])
+async def read_user_campaigns(
+    view_as_dm: Optional[bool] = False, 
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    if view_as_dm:
+        campaigns = await crud_campaign.get_campaigns_by_dm(
+            db=db, dm_user_id=current_user.id, skip=skip, limit=limit
+        )
+    else:
+        campaigns = await crud_campaign.get_campaigns_for_user_as_member(
+            db=db, user_id=current_user.id, skip=skip, limit=limit
+        )
+    return campaigns
+
+@router.get("/discoverable", response_model=List[CampaignSchema])
+async def read_discoverable_campaigns(
+    skip: int = 0,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+):
+    campaigns = await crud_campaign.get_discoverable_campaigns(db=db, skip=skip, limit=limit)
+    return campaigns
+
+@router.get("/{campaign_id}/", response_model=CampaignSchema)
+async def read_single_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    
+    is_member = any(member.user_id == current_user.id for member in campaign.members)
+    if campaign.dm_user_id != current_user.id and not is_member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this campaign"
+        )
+    
+    members_data = []
+    for member in campaign.members:
+        member_data = CampaignMemberSchema.model_validate(member).model_dump()
+        if member.user:
+            member_data['user'] = UserInCampaign.model_validate(member.user).model_dump()
+        members_data.append(member_data)
+
+    campaign_data = CampaignSchema.model_validate(campaign).model_dump()
+    campaign_data['members'] = members_data
+    if campaign.dm:
+        campaign_data['dm'] = UserInCampaign.model_validate(campaign.dm).model_dump()
+
+    return CampaignSchema(**campaign_data)
+
+@router.put("/{campaign_id}", response_model=CampaignSchema)
+async def update_existing_campaign(
+    campaign_id: int,
+    campaign_in: CampaignUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    db_campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id) 
+    if not db_campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if db_campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to update this campaign"
+        )
+    return await crud_campaign.update_campaign(db=db, campaign=db_campaign, campaign_in=campaign_in)
+
+@router.delete("/{campaign_id}", response_model=CampaignSchema)
+async def delete_existing_campaign(
+    campaign_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    deleted_campaign = await crud_campaign.delete_campaign(
+        db=db, campaign_id=campaign_id, dm_user_id=current_user.id
+    )
+    if not deleted_campaign:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Campaign not found or not authorized to delete"
+        )
+    return deleted_campaign
+
+@router.post("/{campaign_id}/join-requests", response_model=CampaignMemberSchema, status_code=status.HTTP_201_CREATED)
+async def player_request_to_join_campaign(
+    campaign_id: int,
+    join_request_in: PlayerCampaignJoinRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    if join_request_in.character_id is not None:
+        character = await crud_character.get_character(db=db, character_id=join_request_in.character_id)
+        if not character or character.user_id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Character with ID {join_request_in.character_id} not found or not owned by user."
+            )
+    join_request_member = await crud_campaign.create_join_request(
+        db=db,
+        campaign_id=campaign_id,
+        user_id=current_user.id,
+        character_id=join_request_in.character_id
+    )
+    if not join_request_member:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not submit join request. Campaign may not exist, not be open for recruitment, you might already be a member/DM, or campaign is full."
+        )
+    return join_request_member
+
+@router.get("/{campaign_id}/join-requests", response_model=List[CampaignMemberSchema])
+async def dm_list_pending_join_requests(
+    campaign_id: int,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    try:
+        pending_requests = await crud_campaign.get_pending_join_requests_for_campaign(
+            db=db, 
+            campaign_id=campaign_id, 
+            requesting_user_id=current_user.id,
+            skip=skip,
+            limit=limit
+        )
+        return pending_requests
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        print(f"Error in dm_list_pending_join_requests: {e}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Could not retrieve join requests.")
+
+@router.put("/{campaign_id}/join-requests/{user_id_of_requester}/approve", response_model=CampaignMemberSchema)
+async def dm_approve_join_request(
+    campaign_id: int,
+    user_id_of_requester: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the DM can approve join requests for this campaign."
+        )
+    active_members_count = sum(1 for member in campaign.members if member.status == CampaignMemberStatusEnum.ACTIVE)
+    if campaign.max_players is not None:
+        is_requester_already_active = any(
+            member.user_id == user_id_of_requester and member.status == CampaignMemberStatusEnum.ACTIVE 
+            for member in campaign.members
+        )
+        if not is_requester_already_active and (active_members_count + 1) > campaign.max_players:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Campaign is already full or approving this member would exceed maximum player limit.")
+
+    updated_member = await crud_campaign.update_campaign_member_status(
+        db=db,
+        campaign_id=campaign_id,
+        user_id=user_id_of_requester,
+        new_status=CampaignMemberStatusEnum.ACTIVE
+    )
+    if not updated_member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Join request for user ID {user_id_of_requester} not found or could not be updated."
+        )
+    return updated_member
+
+@router.put("/{campaign_id}/join-requests/{user_id_of_requester}/reject", response_model=CampaignMemberSchema)
+async def dm_reject_join_request(
+    campaign_id: int,
+    user_id_of_requester: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the DM can reject join requests for this campaign."
+        )
+    updated_member = await crud_campaign.update_campaign_member_status(
+        db=db,
+        campaign_id=campaign_id,
+        user_id=user_id_of_requester,
+        new_status=CampaignMemberStatusEnum.REJECTED
+    )
+    if not updated_member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Join request for user ID {user_id_of_requester} not found or could not be updated."
+        )
+    return updated_member
+
+@router.post("/{campaign_id}/invite", response_model=CampaignMemberSchema, status_code=status.HTTP_201_CREATED)
+async def dm_invite_player_to_campaign(
+    campaign_id: int,
+    invite_in: CampaignInviteRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    await get_campaign_and_verify_dm(campaign_id=campaign_id, db=db, current_user=current_user)
+    user_to_invite = await crud_user.get_user_by_username(db, username=invite_in.username)
+    if not user_to_invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"User with username '{invite_in.username}' not found."
+        )
+    try:
+        invitation = await crud_campaign.create_invitation(
+            db=db,
+            campaign_id=campaign_id,
+            user_to_invite_id=user_to_invite.id
+        )
+        return invitation
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+@router.post("/{campaign_id}/members", response_model=CampaignMemberSchema, status_code=status.HTTP_201_CREATED)
+async def add_player_to_campaign_by_dm(
+    campaign_id: int,
+    member_in: CampaignMemberAdd,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the DM can directly add members to this campaign."
+        )
+    user_to_add = await crud_user.get_user_by_id(db, user_id=member_in.user_id_to_add)
+    if not user_to_add:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"User with ID {member_in.user_id_to_add} not found.")
+    
+    new_member = await crud_campaign.add_member_to_campaign(
+        db=db, 
+        campaign_id=campaign_id, 
+        user_id=member_in.user_id_to_add, 
+        character_id=member_in.character_id,
+        initial_status=CampaignMemberStatusEnum.ACTIVE
+    )
+    if not new_member:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not add member. User may already be a member or campaign may be full.")
+    return new_member
+
+@router.get("/{campaign_id}/members", response_model=List[CampaignMemberSchema])
+async def list_campaign_members(
+    campaign_id: int,
+    status: Optional[CampaignMemberStatusEnum] = Query(None, description="Filter members by status (e.g., ACTIVE, PENDING_APPROVAL)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    
+    is_active_member = any(m.user_id == current_user.id and m.status == CampaignMemberStatusEnum.ACTIVE for m in campaign.members)
+    if campaign.dm_user_id != current_user.id and not is_active_member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view members of this campaign."
+        )
+    
+    if status:
+        return [member for member in campaign.members if member.status == status]
+    return campaign.members
+
+@router.delete("/{campaign_id}/members/{user_id_to_remove}", response_model=CampaignMemberSchema)
+async def remove_player_from_campaign_by_dm(
+    campaign_id: int,
+    user_id_to_remove: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the DM can remove members from this campaign."
+        )
+    if campaign.dm_user_id == user_id_to_remove:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="DM cannot be removed as a member via this endpoint.")
+    removed_member = await crud_campaign.remove_member_from_campaign(
+        db=db, campaign_id=campaign_id, user_id_to_remove=user_id_to_remove
+    )
+    if not removed_member:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found in this campaign")
+    return removed_member
+
+@router.put("/{campaign_id}/me/character", response_model=CampaignMemberSchema)
+async def player_updates_character_for_campaign(
+    campaign_id: int,
+    character_selection: CampaignMemberUpdateCharacter,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    updated_membership = await crud_campaign.update_campaign_member_character(
+        db=db, campaign_id=campaign_id, user_id=current_user.id, character_id=character_selection.character_id
+    )
+    if not updated_membership:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Campaign membership not found for this user, character not owned by user, or character update failed."
+        )
+    return updated_membership
+
+@router.post("/{campaign_id}/members/{campaign_member_id}/award-xp", response_model=CharacterSchema)
+async def dm_award_xp_to_character_in_campaign(
+    campaign_id: int,
+    campaign_member_id: int,
+    xp_award: XPAwardRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: UserModel = Depends(get_current_active_user)
+):
+    campaign = await crud_campaign.get_campaign(db=db, campaign_id=campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found")
+    if campaign.dm_user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the DM can award XP in this campaign."
+        )
+
+    member_result = await db.execute(
+        select(CampaignMemberModel)
+        .filter(CampaignMemberModel.id == campaign_member_id, CampaignMemberModel.campaign_id == campaign_id)
+    )
+    member = member_result.scalars().first()
+
+    if not member or not member.character_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Campaign member not found or no character assigned to this member in this campaign."
+        )
+    
+    character_to_award = await crud_character.get_character(db=db, character_id=member.character_id)
+    if not character_to_award:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character not found.")
+    
+    if character_to_award.user_id != member.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Character does not belong to the specified campaign member."
+        )
+
+    try:
+        updated_character = await crud_character.award_xp_to_character(
+            db=db, character=character_to_award, xp_to_add=xp_award.amount
+        )
+        return updated_character
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
