@@ -1,3 +1,4 @@
+# Path: api/app/crud/crud_campaign.py
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
