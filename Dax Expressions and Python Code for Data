@@ -1,0 +1,303 @@
+DAX templates
+
+Standard calendar (calculated table) Explanation: Creates a reusable Date table from the min/max of your primary fact date. Mark it as the model’s Date table after creation.
+Code:
+Calendar =
+VAR MinDate = MINX(ALL(FactTable), FactTable[DateActive])
+VAR MaxDate = MAXX(ALL(FactTable), FactTable[DateActive])
+RETURN
+ADDCOLUMNS(
+CALENDAR(MinDate, MaxDate),
+"Year", YEAR([Date]),
+"Month", MONTH([Date]),
+"MonthName", FORMAT([Date], "mmm"),
+"Quarter", "Q" & FORMAT([Date], "Q"),
+"MonthIndex", YEAR([Date]) * 12 + MONTH([Date]),
+"YearMonth", FORMAT([Date], "yyyy-mm")
+)
+
+Base measures scaffold Explanation: Foundational measures you’ll branch other measures from—counts, distinct IDs, and sums.
+Code:
+Row Count = COUNTROWS(FactTable)
+Distinct IDs = DISTINCTCOUNT(FactTable[IDColumn])
+Total Numeric = SUM(FactTable[NumericColumn])
+
+Time intelligence pack (plug any base measure into [Base]) Explanation: MTD, QTD, YTD, MoM, YoY, rolling months—requires a marked Date table.
+Code:
+Base = [Row Count]
+
+MTD = TOTALMTD([Base], DimDate[Date])
+QTD = TOTALQTD([Base], DimDate[Date])
+YTD = TOTALYTD([Base], DimDate[Date])
+
+Previous Month = CALCULATE([Base], DATEADD(DimDate[Date], -1, MONTH))
+MoM Change = [Base] - [Previous Month]
+MoM % = DIVIDE([MoM Change], [Previous Month])
+
+Previous Year = CALCULATE([Base], DATEADD(DimDate[Date], -1, YEAR))
+YoY Change = [Base] - [Previous Year]
+YoY % = DIVIDE([YoY Change], [Previous Year])
+
+Rolling 12 Months = CALCULATE([Base], DATESINPERIOD(DimDate[Date], MAX(DimDate[Date]), -12, MONTH))
+
+Percent of total (global vs slicer-aware) Explanation: Global ignores all filters; slicer-aware keeps slicers but ignores the current axis dimension.
+Code:
+% of Total (Global) =
+VAR current = [Base]
+VAR grand = CALCULATE([Base], ALL(FactTable))
+RETURN DIVIDE(current, grand)
+
+% of Total (Respect slicers, ignore axis) =
+VAR current = [Base]
+VAR denom = CALCULATE([Base], ALLSELECTED(AxisTable[AxisColumn]))
+RETURN DIVIDE(current, denom)
+
+Dynamic Top N (parameter table + filter measure) Explanation: Create a slicer for Top N and filter visuals to only show those items.
+Code:
+Top N Parameter =
+DATATABLE("Top N", INTEGER, { {3}, {5}, {10}, {20}, {50} })
+
+Top N Selected = SELECTEDVALUE('Top N Parameter'[Top N], 10)
+
+Show in Top N =
+VAR n = [Top N Selected]
+VAR current = SELECTEDVALUE(AxisTable[AxisColumn])
+VAR topItems = TOPN(n, VALUES(AxisTable[AxisColumn]), [Base], DESC)
+RETURN IF(CONTAINS(topItems, AxisTable[AxisColumn], current), 1, 0)
+
+Ranking within the current axis Explanation: Ranks items by your base measure while respecting slicers.
+Code:
+Rank by Base =
+RANKX(
+ALLSELECTED(AxisTable[AxisColumn]),
+[Base],
+,
+DESC,
+Dense
+)
+
+Switch between two date roles (e.g., Created vs Validated) Explanation: A slicer chooses which date column drives your measures (one active relationship, one inactive).
+Code:
+Date Role =
+DATATABLE("Role", STRING, { {"Created"}, {"Validated"} })
+
+Date Role Selected = SELECTEDVALUE('Date Role'[Role], "Created")
+
+Base (Role-aware) =
+VAR created = CALCULATE([Base], USERELATIONSHIP(FactTable[DateActive], DimDate[Date]))
+VAR validated = CALCULATE([Base], USERELATIONSHIP(FactTable[DateInactive], DimDate[Date]))
+RETURN SWITCH(TRUE(), [Date Role Selected] = "Validated", validated, created)
+
+Dynamic title for visuals Explanation: Shows selected axis label, date range, and current value in the title.
+Code:
+Title – Base by Axis =
+VAR axisLabel = IF(HASONEVALUE(AxisTable[AxisColumn]), SELECTEDVALUE(AxisTable[AxisColumn]), "All")
+VAR period = FORMAT(MIN(DimDate[Date]), "mmm yyyy") & " – " & FORMAT(MAX(DimDate[Date]), "mmm yyyy")
+RETURN axisLabel & " | " & period & " | " & FORMAT([Base], "#,0")
+
+Rolling window (days and months) Explanation: Generic rolling periods; adjust lengths as needed.
+Code:
+Rolling N Days =
+CALCULATE([Base], DATESINPERIOD(DimDate[Date], MAX(DimDate[Date]), -30, DAY))
+
+Rolling N Months =
+CALCULATE([Base], DATESINPERIOD(DimDate[Date], MAX(DimDate[Date]), -12, MONTH))
+
+Safe wrapper to avoid blanks Explanation: Stabilizes card/KPI visuals by returning 0 instead of BLANK.
+Code:
+Safe Base =
+VAR v = [Base]
+RETURN IF(ISBLANK(v), 0, v)
+
+Python templates (Power Query and Python visuals)
+
+Power Query cleanup function (single block: imports, function, example call) Explanation: Normalizes headers, trims text, parses dates, coerces numerics with optional winsorizing, and de-duplicates by ID.
+Code:
+import pandas as pd
+import numpy as np
+
+df = dataset.copy()
+
+def clean_table(
+df,
+text_cols=None,
+date_cols=None,
+numeric_cols=None,
+id_col=None,
+fill_unknown=True,
+winsorize=True,
+winsor_pct=0.99
+):
+df = df.copy()
+df.columns = [c.strip().replace(" ", "_") for c in df.columns]
+if text_cols:
+for c in text_cols:
+if c in df.columns:
+df[c] = df[c].astype(str).str.strip()
+if fill_unknown:
+df[c] = df[c].replace({"": "Unknown"}).fillna("Unknown")
+if date_cols:
+for c in date_cols:
+if c in df.columns:
+df[c] = pd.to_datetime(df[c], errors="coerce")
+if numeric_cols:
+for c in numeric_cols:
+if c in df.columns:
+df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+if winsorize and df[c].notna().any():
+cap = df[c].quantile(winsor_pct)
+df[c] = np.clip(df[c], 0, cap)
+if id_col and date_cols:
+key_date = date_cols[0]
+df.sort_values([id_col, key_date], ascending=[True, False], inplace=True)
+df = df.drop_duplicates(subset=[id_col], keep="first")
+return df
+
+df = clean_table(
+df,
+text_cols=["DefectType", "DefectStatus", "OriginWorkstation"],
+date_cols=["CreatedOn", "ValidatedOn"],
+numeric_cols=["Quantity"],
+id_col="DefectID"
+)
+df
+
+Power Query date table builder (single block: imports, function, example call) Explanation: Generates a calendar dataframe from min/max across multiple date columns.
+Code:
+import pandas as pd
+
+df = dataset.copy()
+
+def make_calendar(df, date_cols, buffer_days=0):
+dates = []
+for c in date_cols:
+if c in df.columns:
+s = pd.to_datetime(df[c], errors="coerce")
+dates += [s.min(), s.max()]
+if not dates or pd.isna(min(dates)) or pd.isna(max(dates)):
+return pd.DataFrame({"Date": []})
+min_date = min(dates) - pd.Timedelta(days=buffer_days)
+max_date = max(dates) + pd.Timedelta(days=buffer_days)
+cal = pd.DataFrame({"Date": pd.date_range(min_date, max_date, freq="D")})
+cal["Year"] = cal["Date"].dt.year
+cal["Month"] = cal["Date"].dt.month
+cal["MonthName"] = cal["Date"].dt.strftime("%b")
+cal["Quarter"] = "Q" + cal["Date"].dt.quarter.astype(str)
+cal["YearMonth"] = cal["Date"].dt.strftime("%Y-%m")
+return cal
+
+calendar = make_calendar(dataset, date_cols=["CreatedOn", "ValidatedOn"], buffer_days=30)
+calendar
+
+Dimension extractor (single block: imports, function, example call) Explanation: Creates a clean dimension table from a fact column (deduped, sorted, blanks to “Unknown”).
+Code:
+import pandas as pd
+
+df = dataset.copy()
+
+def make_dimension(df, col, rename_to=None):
+if col not in df.columns:
+return pd.DataFrame({rename_to or col: []})
+dim = pd.DataFrame({col: df[col].astype(str).str.strip().replace({"": "Unknown"}).dropna().unique()})
+dim = dim.sort_values(col)
+if rename_to and rename_to != col:
+dim = dim.rename(columns={col: rename_to})
+return dim
+
+dim_workstation = make_dimension(dataset, "OriginWorkstation")
+dim_workstation
+
+Python visual: Top-N bar chart (single block: imports, function, example call) Explanation: Top N categories by count (rows or distinct IDs) with labels—use in Python visuals.
+Code:
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def bar_topn(df, category_col, id_col=None, n=10, title="Top Categories", palette="Blues_r"):
+if df.empty or category_col not in df.columns:
+plt.figure(figsize=(6,2))
+plt.text(0.5, 0.5, "No data or column missing", ha="center", va="center")
+plt.axis("off")
+return
+if id_col and id_col in df.columns:
+agg = df.groupby(category_col, as_index=False)[id_col].nunique().rename(columns={id_col: "Value"})
+else:
+agg = df.groupby(category_col, as_index=False).size().rename(columns={"size": "Value"})
+agg[category_col] = agg[category_col].astype(str).str.strip().replace({"": "Unknown"})
+agg = agg.sort_values("Value", ascending=False).head(n)
+plt.figure(figsize=(8,4))
+ax = sns.barplot(data=agg, y=category_col, x="Value", palette=palette)
+ax.set_title(title)
+ax.set_xlabel("Count")
+ax.set_ylabel(category_col)
+for p in ax.patches:
+w = p.get_width()
+ax.text(w, p.get_y() + p.get_height()/2, f"{int(w):,}", va="center", ha="left")
+plt.tight_layout()
+
+df = dataset.copy()
+bar_topn(df, category_col="DefectType", id_col="DefectID", n=10, title="Top Defect Types")
+plt.show()
+
+Python visual: monthly trend (single block: imports, function, example call) Explanation: Aggregates to month and plots a line; counts rows or distinct IDs—use in Python visuals.
+Code:
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def line_monthly(df, date_col, id_col=None, title="Monthly Trend", color="#2C7FB8"):
+if df.empty or date_col not in df.columns:
+plt.figure(figsize=(6,2))
+plt.text(0.5, 0.5, "No data or date missing", ha="center", va="center")
+plt.axis("off")
+return
+s = pd.to_datetime(df[date_col], errors="coerce")
+tdf = df.assign(_date=s).dropna(subset=["_date"])
+tdf["YearMonth"] = tdf["_date"].dt.to_period("M").dt.to_timestamp()
+if id_col and id_col in tdf.columns:
+agg = tdf.groupby("YearMonth", as_index=False)[id_col].nunique().rename(columns={id_col: "Value"})
+else:
+agg = tdf.groupby("YearMonth", as_index=False).size().rename(columns={"size": "Value"})
+plt.figure(figsize=(8,3.5))
+ax = sns.lineplot(data=agg, x="YearMonth", y="Value", marker="o", color=color)
+ax.set_title(title)
+ax.set_xlabel("Month")
+ax.set_ylabel("Count")
+ax.grid(True, axis="y", alpha=0.3)
+plt.tight_layout()
+
+df = dataset.copy()
+line_monthly(df, date_col="CreatedOn", id_col="DefectID", title="Defects Over Time")
+plt.show()
+
+Python visual: heatmap (single block: imports, function, example call) Explanation: Row × column concentration heatmap (e.g., Workstation × Defect Type) with counts—use in Python visuals.
+Code:
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def heatmap_cross(df, row_col, col_col, id_col=None, title="Heatmap"):
+need = {row_col, col_col}
+if df.empty or not need.issubset(df.columns):
+plt.figure(figsize=(6,2))
+plt.text(0.5, 0.5, "No data or columns missing", ha="center", va="center")
+plt.axis("off")
+return
+gdf = df.copy()
+for c in [row_col, col_col]:
+gdf[c] = gdf[c].astype(str).str.strip().replace({"": "Unknown"})
+if id_col and id_col in gdf.columns:
+agg = gdf.groupby([row_col, col_col], as_index=False)[id_col].nunique().rename(columns={id_col: "Value"})
+else:
+agg = gdf.groupby([row_col, col_col], as_index=False).size().rename(columns={"size": "Value"})
+pivot = agg.pivot(index=row_col, columns=col_col, values="Value").fillna(0)
+plt.figure(figsize=(9,6))
+ax = sns.heatmap(pivot, cmap="Reds", linewidths=0.3)
+ax.set_title(title)
+ax.set_xlabel(col_col)
+ax.set_ylabel(row_col)
+plt.tight_layout()
+
+df = dataset.copy()
+heatmap_cross(df, row_col="OriginWorkstation", col_col="DefectType", id_col="DefectID", title="Workstation × Defect Type")
+plt.show()
