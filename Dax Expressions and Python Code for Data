@@ -109,6 +109,123 @@ Safe Base =
 VAR v = [Base]
 RETURN IF(ISBLANK(v), 0, v)
 
+Current Value:
+      Total Revenue = SUM(Financials[Revenue])
+
+Pervious Period Value ( for Month over Month Comparison):
+      
+Previous Month Revenue = 
+CALCULATE(
+    [Total Revenue],
+    DATEADD(Financials[Date], -1, MONTH)
+)
+
+
+Percentage Change:
+    
+Revenue % Change = 
+DIVIDE(
+    [Total Revenue] - [Previous Month Revenue],
+    [Previous Month Revenue]
+)
+
+
+Step-by-Step Guide to Build the Dashboard in Power BI
+
+Step 1: Import the Data
+
+Open Power BI Desktop
+Click “Get Data” > “Excel”
+Select Financial_Dashboard_Sample.xlsx
+Choose the sheet (usually named Sheet1) and click “Load”
+
+Step 2: Create KPI Cards with Percentage Change
+🔹 Revenue Card
+
+Go to the Visualizations pane and click the Card visual
+Drag Revenue into the Values field
+Rename the card title to “Revenue”
+To show the percentage change:
+
+Add another Card visual
+Drag Revenue % Change into the Values
+Rename it to “Revenue % Change”
+Format it as a percentage in the Modeling tab
+
+Repeat this for:
+
+Sales and Sales % Change
+Gross Margin and Gross Margin % Change
+Profit and Profit % Change
+
+Step 3: Create the Sales and Profit Chart by Month
+🔹 Combo Chart (Clustered Column and Line)
+
+Select the Combo Chart visual (Column + Line)
+Drag Month to the Shared Axis
+Drag Sales to the Column Values
+Drag Profit to the Line Values
+Format the X-axis to show Month-Year:
+
+Click the axis > Format > choose “MMM YYYY”
+
+Step 4: Add a Slicer for Month
+
+Click the Slicer visual
+Drag Month into the slicer
+Choose Between or Dropdown for filtering
+
+Step 5: Format the Dashboard
+
+Use consistent colors for cards (e.g., green for growth, red for decline)
+Add titles to each visual
+Resize and arrange visuals for a clean layout
+Use Themes from the View tab for a polished look
+
+
+Here are the DAX measures you can create in Power BI for your KPI cards using the dataset from the Excel file:
+
+📌 1. Total Revenue
+DAXTotal Revenue = SUM(Financials[Revenue])
+
+📌 2. Previous Month Revenue
+DAXPrevious Month Revenue = CALCULATE(    [Total Revenue],    DATEADD(Financials[Month], -1, MONTH))
+
+📌 3. Revenue % Change
+DAXRevenue % Change = DIVIDE(    [Total Revenue] - [Previous Month Revenue],    [Previous Month Revenue])
+
+📌 4. Total Sales
+DAXTotal Sales = SUM(Financials[Sales])
+
+📌 5. Previous Month Sales
+DAXPrevious Month Sales = CALCULATE(    [Total Sales],    DATEADD(Financials[Month], -1, MONTH))S
+
+📌 6. Sales % Change
+DAXSales % Change = DIVIDE(    [Total Sales] - [Previous Month Sales],    [Previous Month Sales])
+
+📌 7. Total Gross Margin
+DAXTotal Gross Margin = SUM(Financials[Gross Margin])
+
+📌 8. Previous Month Gross Margin
+DAXPrevious Month Gross Margin = CALCULATE(    [Total Gross Margin],    DATEADD(Financials[Month], -1, MONTH))
+
+📌 9. Gross Margin % Change
+DAXGross Margin % Change = DIVIDE(    [Total Gross Margin] - [Previous Month Gross Margin],    [Previous Month Gross Margin])
+📌 10. Total Profit
+DAXTotal Profit = SUM(Financials[Profit])
+
+📌 11. Previous Month Profit
+DAXPrevious Month Profit = CALCULATE(    [Total Profit],    DATEADD(Financials[Month], -1, MONTH))
+
+📌 12. Profit % Change
+DProfit % Change = DIVIDE(    [Total Profit] - [Previous Month Profit],    [Previous Month Profit])
+
+
+
+
+
+
+
 Python templates (Power Query and Python visuals)
 
 Power Query cleanup function (single block: imports, function, example call) Explanation: Normalizes headers, trims text, parses dates, coerces numerics with optional winsorizing, and de-duplicates by ID.
